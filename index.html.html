@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>XOX Online with Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<style>
+body{
+    margin:0;
+    font-family:Arial;
+    background:linear-gradient(135deg,#141e30,#243b55);
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+    color:white;
+}
+.container{
+    background:#1f2a48;
+    padding:15px;
+    border-radius:15px;
+    width:360px;
+    box-shadow:0 15px 40px rgba(0,0,0,.6);
+}
+.board{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:8px;
+    margin:10px 0;
+}
+.cell{
+    height:70px;
+    background:#2f3b66;
+    border-radius:10px;
+    font-size:34px;
+    font-weight:bold;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    cursor:pointer;
+    transition:.3s;
+}
+.cell:hover{transform:scale(1.05)}
+.win{background:#00e676;color:black;animation:pulse .5s infinite alternate}
+@keyframes pulse{from{transform:scale(1)}to{transform:scale(1.1)}}
+
+input,button{
+    width:100%;
+    padding:7px;
+    margin:4px 0;
+    border-radius:10px;
+    border:none;
+}
+button{
+    background:#ff4081;
+    color:white;
+    cursor:pointer;
+}
+.score{
+    display:flex;
+    justify-content:space-between;
+    font-size:13px;
+}
+#chatBox{
+    background:#121a33;
+    height:120px;
+    overflow-y:auto;
+    border-radius:10px;
+    padding:5px;
+    margin-top:8px;
+    font-size:13px;
+}
+.chat-msg{
+    margin:3px 0;
+}
+.me{color:#ff80ab}
+.other{color:#90caf9}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+<h3 style="text-align:center">XOX Online</h3>
+
+<input id="name" placeholder="Your Name">
+<input id="room" placeholder="Room Code">
+<button onclick="joinRoom()">Join Room</button>
+
+<div class="score">
+<div id="xName">X:0</div>
+<div id="dScore">Draw:0</div>
+<div id="oName">O:0</div>
+</div>
+
+<div id="status">Waiting...</div>
+
+<div class="board" id="board"></div>
+
+<!-- CHAT -->
+<div id="chatBox"></div>
+<input id="chatInput" placeholder="Type message...">
+<button onclick="sendMsg()">Send</button>
+
+<button onclick="resetGame()">Restart</button>
+</div>
+
+<audio id="clickSound" src="https://www.soundjay.com/button/sounds/button-16.mp3"></audio>
+<audio id="winSound" src="https://www.soundjay.com/misc/sounds/bell-ringing-05.mp3"></audio>
+<audio id="drawSound" src="https://www.soundjay.com/button/sounds/button-10.mp3"></audio>
+
+<script>
+/* 🔥 PASTE YOUR FIREBASE CONFIG HERE 🔥 */
+var firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "XXXX",
+  appId: "XXXX"
+};
+firebase.initializeApp(firebaseConfig);
+const db=firebase.database();
+
+const boardDiv=document.getElementById("board");
+const chatBox=document.getElementById("chatBox");
+const clickSound=document.getElementById("clickSound");
+const winSound=document.getElementById("winSound");
+const drawSound=document.getElementById("drawSound");
+const statusText=document.getElementById("status");
+
+let roomCode="",player="",playerName="";
+
+for(let i=0;i<9;i++){
+    let d=document.createElement("div");
+    d.className="cell";
+    d.onclick=()=>play(i);
+    boardDiv.appendChild(d);
+}
+
+function joinRoom(){
+    roomCode=document.getElementById("room").value;
+    playerName=document.getElementById("name").value;
+    if(!roomCode||!playerName)return;
+
+    db.ref("rooms/"+roomCode).once("value",snap=>{
+        if(!snap.exists()){
+            db.ref("rooms/"+roomCode).set({
+                board:["","","","","","","","",""],
+                turn:"X",
+                x:0,o:0,d:0,
+                xName:playerName,
+                oName:"Waiting..."
+            });
+            player="X";
+        }else{
+            player="O";
+            db.ref("rooms/"+roomCode+"/oName").set(playerName);
+        }
+    });
+
+    db.ref("rooms/"+roomCode).on("value",updateUI);
+    db.ref("chat/"+roomCode).on("child_added",addMsg);
+}
+
+function play(i){
+    db.ref("rooms/"+roomCode).once("value",snap=>{
+        let d=snap.val();
+        if(d.board[i]||d.turn!==player)return;
+        clickSound.play();
+        d.board[i]=player;
+        d.turn=player==="X"?"O":"X";
+        db.ref("rooms/"+roomCode).set(d);
+    });
+}
+
+function updateUI(snap){
+    let d=snap.val();
+    document.querySelectorAll(".cell").forEach((c,i)=>{
+        c.textContent=d.board[i];
+        c.classList.remove("win");
+    });
+    document.getElementById("xName").textContent=`${d.xName}: ${d.x}`;
+    document.getElementById("oName").textContent=`${d.oName}: ${d.o}`;
+    document.getElementById("dScore").textContent=`Draw: ${d.d}`;
+    statusText.textContent="Turn: "+(d.turn==="X"?d.xName:d.oName);
+    checkWin(d);
+}
+
+function checkWin(d){
+    const w=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    for(let p of w){
+        let[a,b,c]=p;
+        if(d.board[a]&&d.board[a]==d.board[b]&&d.board[a]==d.board[c]){
+            winSound.play();
+            d[d.board[a].toLowerCase()]++;
+            d.board=["","","","","","","","",""];
+            db.ref("rooms/"+roomCode).set(d);
+            return;
+        }
+    }
+    if(d.board.every(x=>x)){
+        drawSound.play();
+        d.d++;
+        d.board=["","","","","","","","",""];
+        db.ref("rooms/"+roomCode).set(d);
+    }
+}
+
+function resetGame(){
+    db.ref("rooms/"+roomCode+"/board").set(["","","","","","","","",""]);
+}
+
+function sendMsg(){
+    let msg=document.getElementById("chatInput").value;
+    if(!msg)return;
+    db.ref("chat/"+roomCode).push({
+        name:playerName,
+        text:msg
+    });
+    document.getElementById("chatInput").value="";
+}
+
+function addMsg(snap){
+    let m=snap.val();
+    let div=document.createElement("div");
+    div.className="chat-msg "+(m.name===playerName?"me":"other");
+    div.textContent=m.name+": "+m.text;
+    chatBox.appendChild(div);
+    chatBox.scrollTop=chatBox.scrollHeight;
+}
+</script>
+
+</body>
+</html>
